@@ -1,0 +1,164 @@
+{
+  "name": "Enterprise AI Onboarding - Safe Prototype",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "onboarding/intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b831c08c-f7fb-4d00-b0ec-3452217b3861",
+      "name": "New Hire Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-840, 80],
+      "webhookId": "enterprise-onboarding-intake"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $json.body ?? $json;\nconst now = new Date();\nconst clean = (value) => typeof value === 'string' ? value.trim() : value;\nconst employee = {\n  employeeId: clean(input.employeeId),\n  fullName: clean(input.fullName),\n  personalEmail: clean(input.personalEmail),\n  jobTitle: clean(input.jobTitle),\n  department: clean(input.department),\n  location: clean(input.location),\n  country: clean(input.country ?? 'PK'),\n  employmentType: clean(input.employmentType ?? 'FULL_TIME'),\n  workMode: clean(input.workMode ?? 'HYBRID'),\n  startDate: clean(input.startDate),\n  managerId: clean(input.managerId)\n};\nconst required = ['employeeId', 'fullName', 'personalEmail', 'jobTitle', 'department', 'location', 'startDate', 'managerId'];\nconst missingFields = required.filter((key) => !employee[key]);\nconst conflicts = [];\nif (employee.personalEmail && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(employee.personalEmail)) conflicts.push('INVALID_PERSONAL_EMAIL');\nif (employee.startDate && !/^\\d{4}-\\d{2}-\\d{2}$/.test(employee.startDate)) conflicts.push('INVALID_START_DATE_FORMAT');\nconst start = employee.startDate ? new Date(employee.startDate + 'T00:00:00Z') : null;\nif (start && Number.isNaN(start.getTime())) conflicts.push('INVALID_START_DATE');\nconst safeEmployeeId = employee.employeeId || 'UNKNOWN';\nconst safeStartDate = employee.startDate || 'UNKNOWN';\nconst idempotencyKey = `${safeEmployeeId}:${safeStartDate}`;\nlet hash = 0;\nfor (const char of idempotencyKey) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;\nconst caseId = `ONB-${now.getUTCFullYear()}-${String(Math.abs(hash)).padStart(8, '0').slice(0, 8)}`;\nconst requiresHumanReview = missingFields.length > 0 || conflicts.length > 0;\nreturn [{ json: {\n  schemaVersion: '1.0',\n  workflowVersion: 'prototype-1.0',\n  caseId,\n  correlationId: input.correlationId ?? caseId,\n  idempotencyKey,\n  receivedAt: now.toISOString(),\n  status: requiresHumanReview ? 'NEEDS_REVIEW' : 'APPROVED',\n  employee,\n  documents: Array.isArray(input.documents) ? input.documents.map((document) => ({ documentId: document.documentId, type: document.type ?? 'UNKNOWN', storageUri: document.storageUri, malwareScan: document.malwareScan ?? 'PENDING' })) : [],\n  validation: { missingFields, conflicts, requiresHumanReview },\n  requestedSystems: Array.isArray(input.requestedSystems) ? input.requestedSystems : [],\n  audit: [{ event: 'INTAKE_VALIDATED', at: now.toISOString(), actor: 'workflow', result: requiresHumanReview ? 'REVIEW_REQUIRED' : 'PASSED' }]\n} }];"
+      },
+      "id": "b7169093-8489-46fc-a408-f289d41b8d48",
+      "name": "Normalize and Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-600, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "4f779a58-559d-40c2-8348-8745b68c072b",
+              "leftValue": "={{ $json.validation.requiresHumanReview }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "600f1a0c-8afe-45b7-99b6-36cf074abafa",
+      "name": "Human Review Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-360, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $json;\nreturn [{ json: {\n  accepted: false,\n  caseId: record.caseId,\n  status: 'NEEDS_REVIEW',\n  reviewQueue: 'HR_OPERATIONS',\n  reasonCodes: [...record.validation.missingFields.map((field) => `MISSING_${field.toUpperCase()}`), ...record.validation.conflicts],\n  message: 'The onboarding case was quarantined for authorized HR review. No provisioning actions were created.',\n  audit: [...record.audit, { event: 'ROUTED_TO_HUMAN_REVIEW', at: new Date().toISOString(), actor: 'workflow' }]\n} }];"
+      },
+      "id": "c5a47a61-4a0c-4122-a32b-c7c5ad49ef34",
+      "name": "Create Review Case",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-100, -80]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "08f88849-0b3a-4e70-bae9-290529fa1a94",
+      "name": "Return Review Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [160, -80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $json;\nconst start = new Date(record.employee.startDate + 'T09:00:00Z');\nconst due = (offsetDays) => { const value = new Date(start); value.setUTCDate(value.getUTCDate() + offsetDays); return value.toISOString(); };\nconst roleKey = `${record.employee.department}:${record.employee.jobTitle}`.toLowerCase();\nconst equipmentProfile = roleKey.includes('engineering') || roleKey.includes('data') ? 'TECHNICAL_LAPTOP' : 'STANDARD_LAPTOP';\nconst baseline = [\n  { taskCode: 'HR_DOCUMENTS', title: 'Verify required HR documents', ownerGroup: 'HR', dueOffset: -5, risk: 'STANDARD' },\n  { taskCode: 'IT_DEVICE', title: `Prepare ${equipmentProfile.toLowerCase().replace('_', ' ')}`, ownerGroup: 'IT', dueOffset: -2, risk: 'STANDARD' },\n  { taskCode: 'IDENTITY_ACCOUNT', title: 'Create identity and email account', ownerGroup: 'IT_IDENTITY', dueOffset: -1, risk: 'CONTROLLED' },\n  { taskCode: 'SECURITY_TRAINING', title: 'Assign security awareness training', ownerGroup: 'SECURITY', dueOffset: 7, risk: 'STANDARD' },\n  { taskCode: 'MANAGER_PLAN', title: 'Confirm buddy and first-week priorities', ownerGroup: 'HIRING_MANAGER', dueOffset: -3, risk: 'STANDARD' }\n];\nconst tasks = baseline.map((task) => ({\n  externalKey: `${record.caseId}:${task.taskCode}`,\n  ...task,\n  dueAt: due(task.dueOffset),\n  status: 'PENDING',\n  approvalRequired: task.risk === 'CONTROLLED'\n}));\nfor (const system of record.requestedSystems) {\n  const code = String(system).toUpperCase().replace(/[^A-Z0-9]+/g, '_');\n  tasks.push({\n    externalKey: `${record.caseId}:ACCESS_${code}`,\n    taskCode: `ACCESS_${code}`,\n    title: `Review access request: ${system}`,\n    ownerGroup: 'SYSTEM_OWNER',\n    dueAt: due(-1),\n    status: 'PENDING_APPROVAL',\n    risk: 'CONTROLLED',\n    approvalRequired: true\n  });\n}\nreturn [{ json: { ...record, status: 'TASKS_CREATED', requirements: { equipmentProfile, trainingCodes: ['SECURITY_101', 'PRIVACY_101'] }, tasks, audit: [...record.audit, { event: 'TASK_PLAN_CREATED', at: new Date().toISOString(), actor: 'workflow', taskCount: tasks.length }] } }];"
+      },
+      "id": "f0df0e92-683b-4ee9-a721-a663515fa496",
+      "name": "Apply Policy and Build Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-100, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const record = $json;\nconst firstName = record.employee.fullName.split(/\\s+/)[0];\nconst plan = {\n  title: `${firstName}'s first week`,\n  generatedBy: 'DETERMINISTIC_PROTOTYPE',\n  note: 'In production this structure is generated from the versioned prompt and approved resource catalog.',\n  days: [\n    { day: 1, focus: 'Welcome, manager alignment, account setup, and orientation' },\n    { day: 2, focus: 'Team introductions, role context, and security training' },\n    { day: 3, focus: 'Tools, processes, and first guided task' },\n    { day: 4, focus: 'Role learning and stakeholder introductions' },\n    { day: 5, focus: 'First-week review, feedback, and next-week goals' }\n  ]\n};\nreturn [{ json: {\n  accepted: true,\n  caseId: record.caseId,\n  correlationId: record.correlationId,\n  status: record.status,\n  employeeSummary: { fullName: record.employee.fullName, jobTitle: record.employee.jobTitle, department: record.employee.department, location: record.employee.location, startDate: record.employee.startDate },\n  requirements: record.requirements,\n  tasks: record.tasks,\n  onboardingPlan: plan,\n  nextActions: ['Persist case with idempotent upsert', 'Create downstream tickets through adapters', 'Request approvals for controlled access', 'Send approved stakeholder communications'],\n  audit: [...record.audit, { event: 'ONBOARDING_PLAN_DRAFTED', at: new Date().toISOString(), actor: 'workflow', generator: 'DETERMINISTIC_PROTOTYPE' }]\n} }];"
+      },
+      "id": "854997f7-58be-46db-b5a4-57627aabff70",
+      "name": "Draft First Week Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [160, 240]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "id": "f12c8046-78cd-4753-99b9-bf794601bb57",
+      "name": "Return Created Case",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [420, 240]
+    },
+    {
+      "parameters": {
+        "content": "## Production boundaries\n\nThis safe prototype performs deterministic validation, routing, policy mapping, task creation, and plan drafting without credentials.\n\nReplace mock boundaries with credentialed sub-workflows for:\n- durable case storage and audit events\n- malware scanning, OCR, and schema-constrained LLM extraction\n- HR review/approval\n- ticketing, identity, LMS, calendar, and email adapters\n\nDo not connect AI output directly to access provisioning.",
+        "height": 420,
+        "width": 480,
+        "color": 5
+      },
+      "id": "f8de0008-0f27-4358-bff5-c51cb7a538df",
+      "name": "Implementation Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-840, -480]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "New Hire Webhook": {
+      "main": [[{ "node": "Normalize and Validate", "type": "main", "index": 0 }]]
+    },
+    "Normalize and Validate": {
+      "main": [[{ "node": "Human Review Required?", "type": "main", "index": 0 }]]
+    },
+    "Human Review Required?": {
+      "main": [
+        [{ "node": "Create Review Case", "type": "main", "index": 0 }],
+        [{ "node": "Apply Policy and Build Tasks", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Review Case": {
+      "main": [[{ "node": "Return Review Response", "type": "main", "index": 0 }]]
+    },
+    "Apply Policy and Build Tasks": {
+      "main": [[{ "node": "Draft First Week Plan", "type": "main", "index": 0 }]]
+    },
+    "Draft First Week Plan": {
+      "main": [[{ "node": "Return Created Case", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "69ae19c7-fe46-4898-8f32-e789053633e4",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
