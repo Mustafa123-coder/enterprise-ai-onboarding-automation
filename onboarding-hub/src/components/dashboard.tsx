@@ -42,6 +42,19 @@ function formatStartDate(value: string) {
   return days > 1 ? `In ${days} days · ${dateText}` : `Started · ${dateText}`;
 }
 
+function formatTodayLabel(now: Date) {
+  const weekday = new Intl.DateTimeFormat("en", { weekday: "long" }).format(now).toUpperCase();
+  const monthDay = new Intl.DateTimeFormat("en", { month: "long", day: "numeric" }).format(now).toUpperCase();
+  return `${weekday}, ${monthDay}`;
+}
+
+function getGreeting(now: Date) {
+  const hour = now.getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
 export function Dashboard() {
   const [data, setData] = useState<DashboardResponse>(demoData);
   const [loading, setLoading] = useState(true);
@@ -50,6 +63,7 @@ export function Dashboard() {
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<Employee | null>(null);
   const [navOpen, setNavOpen] = useState(false);
+  const [now, setNow] = useState<Date | null>(null);
 
   const loadEmployees = useCallback(async () => {
     try {
@@ -70,6 +84,17 @@ export function Dashboard() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadEmployees();
   }, [loadEmployees]);
+
+  useEffect(() => {
+    // Computed client-side only, after hydration, to avoid server/client
+    // time mismatches. Refreshes every minute so it stays accurate.
+    setNow(new Date());
+    const interval = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const todayLabel = now ? formatTodayLabel(now) : "TODAY";
+  const greeting = now ? getGreeting(now) : "Welcome";
 
   const filtered = useMemo(() => {
     const term = query.toLowerCase().trim();
@@ -116,7 +141,7 @@ export function Dashboard() {
 
         <div className="page" id="overview">
           <section className="hero-row">
-            <div><span className="eyebrow">WEDNESDAY, SEPTEMBER 2</span><h1>Good afternoon, Mustafa.</h1><p>Here’s what’s happening across your onboarding pipeline.</p></div>
+            <div><span className="eyebrow">{todayLabel}</span><h1>{greeting}, Mustafa.</h1><p>Here’s what’s happening across your onboarding pipeline.</p></div>
             <button className="mobile-add" onClick={() => setCreateOpen(true)}><Plus /><span>Add new hire</span></button>
           </section>
 
