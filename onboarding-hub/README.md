@@ -4,7 +4,7 @@ Orbit is a full-stack onboarding command center for People Operations teams. It 
 
 ## Live application
 
-Deployment URL: **[add after deployment]**
+Deployment URL:https://enterprise-ai-onboarding-automation.vercel.app/
 
 ## Product highlights
 
